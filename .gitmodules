@@ -1,0 +1,3 @@
+[submodule "obs-studio"]
+	path = obs-studio
+	url = git@github.com:Stargateur/obs-studio.git
