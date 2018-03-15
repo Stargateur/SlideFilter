@@ -122,7 +122,7 @@ static void slide_filter_render(void *data, gs_effect_t *effect) {
     filter->current_source = 0;
     obs_source_enum_active_sources(parent, &slide_filter_render_callback,
                                    filter);
-    if (++filter->active_source == filter->current_source) {
+    if (++filter->active_source >= filter->current_source) {
       filter->active_source = 0;
     }
     if (filter->random) {
