@@ -2,246 +2,183 @@
 
 OBS_DECLARE_MODULE()
 
-/* Implements common ini-based locale (optional) */
-OBS_MODULE_USE_DEFAULT_LOCALE("slide-filter", "en-US")
+#include <float.h>
 
-#include <graphics/vec2.h>
+#define SLIDE_FILTER_NAME "SlideFilter"
 
 struct slide_filter_data {
-	obs_source_t                   *context;
-
-	gs_effect_t                    *effect;
-	gs_eparam_t                    *param_add;
-	gs_eparam_t                    *param_mul;
-	gs_eparam_t                    *param_image;
-
-	struct vec2                    scroll_speed;
-	gs_samplerstate_t              *sampler;
-	bool                           limit_cx;
-	bool                           limit_cy;
-	uint32_t                       cx;
-	uint32_t                       cy;
-
-	struct vec2                    size_i;
-	struct vec2                    offset;
+  obs_source_t *context;
+  float time_remaining;
+  float interval;
+  size_t active_source;
+  size_t current_source;
+  bool random;
 };
 
-static const char *slide_filter_get_name(void *unused)
-{
-	UNUSED_PARAMETER(unused);
-	return obs_module_text("SlideFilter");
+static const char *slide_filter_get_name(void *unused) {
+  UNUSED_PARAMETER(unused);
+  return obs_module_text(SLIDE_FILTER_NAME);
 }
 
-static void *slide_filter_create(obs_data_t *settings, obs_source_t *context)
-{
-	struct slide_filter_data *filter = bzalloc(sizeof(*filter));
-	char *effect_path = obs_module_file("crop_filter.effect");
-
-	struct gs_sampler_info sampler_info = {
-		.filter = GS_FILTER_LINEAR,
-		.address_u = GS_ADDRESS_WRAP,
-		.address_v = GS_ADDRESS_WRAP
-	};
-
-	filter->context = context;
-
-	obs_enter_graphics();
-	filter->effect = gs_effect_create_from_file(effect_path, NULL);
-	filter->sampler = gs_samplerstate_create(&sampler_info);
-	obs_leave_graphics();
-
-	bfree(effect_path);
-
-	if (!filter->effect) {
-		bfree(filter);
-		return NULL;
-	}
-
-	filter->param_add = gs_effect_get_param_by_name(filter->effect,
-			"add_val");
-	filter->param_mul = gs_effect_get_param_by_name(filter->effect,
-			"mul_val");
-	filter->param_image = gs_effect_get_param_by_name(filter->effect,
-			"image");
-
-	obs_source_update(context, settings);
-	return filter;
+static void slide_filter_destroy(void *data) {
+  struct slide_filter_data *filter = data;
+  blog(LOG_ERROR, "free data " SLIDE_FILTER_NAME);
+  free(filter);
 }
 
-static void slide_filter_destroy(void *data)
-{
-	struct slide_filter_data *filter = data;
-
-	obs_enter_graphics();
-	gs_effect_destroy(filter->effect);
-	gs_samplerstate_destroy(filter->sampler);
-	obs_leave_graphics();
-
-	bfree(filter);
+static void slide_filter_remove_callback(obs_source_t *parent,
+                                         obs_source_t *child, void *data) {
+  struct slide_filter_data *filter = data;
+  blog(LOG_ERROR, "child scene name, %s", obs_source_get_name(child));
+  obs_source_set_enabled(child, true);
 }
 
-static void slide_filter_update(void *data, obs_data_t *settings)
-{
-	struct slide_filter_data *filter = data;
-
-	filter->limit_cx = obs_data_get_bool(settings, "limit_cx");
-	filter->limit_cy = obs_data_get_bool(settings, "limit_cy");
-	filter->cx = (uint32_t)obs_data_get_int(settings, "cx");
-	filter->cy = (uint32_t)obs_data_get_int(settings, "cy");
-
-	filter->scroll_speed.x = (float)obs_data_get_double(settings,
-			"speed_x");
-	filter->scroll_speed.y = (float)obs_data_get_double(settings,
-			"speed_y");
-
-	if (filter->scroll_speed.x == 0.0f)
-		filter->offset.x = 0.0f;
-	if (filter->scroll_speed.y == 0.0f)
-		filter->offset.y = 0.0f;
+static void slide_filter_remove(void *data, obs_source_t *source) {
+  struct slide_filter_data *filter = data;
+  if (!filter) {
+    return;
+  }
+  obs_source_t *parent = obs_filter_get_parent(filter->context);
+  if (!parent) {
+    blog(LOG_ERROR, "%s need to be in a scene", SLIDE_FILTER_NAME);
+    return;
+  }
+  blog(LOG_ERROR, "Scene name: %s", obs_source_get_name(parent));
+  obs_source_enum_active_sources(parent, &slide_filter_remove_callback, filter);
 }
 
-static bool limit_cx_clicked(obs_properties_t *props, obs_property_t *p,
-		obs_data_t *settings)
-{
-	bool limit_size = obs_data_get_bool(settings, "limit_cx");
-	obs_property_set_visible(obs_properties_get(props, "cx"), limit_size);
+static void slide_filter_update(void *data, obs_data_t *settings) {
+  struct slide_filter_data *filter = data;
 
-	UNUSED_PARAMETER(p);
-	return true;
+  filter->interval = (float)obs_data_get_double(settings, "interval");
+  filter->random = obs_data_get_bool(settings, "random");
 }
 
-static bool limit_cy_clicked(obs_properties_t *props, obs_property_t *p,
-		obs_data_t *settings)
-{
-	bool limit_size = obs_data_get_bool(settings, "limit_cy");
-	obs_property_set_visible(obs_properties_get(props, "cy"), limit_size);
+static obs_properties_t *slide_filter_properties(void *data) {
+  obs_properties_t *props = obs_properties_create();
 
-	UNUSED_PARAMETER(p);
-	return true;
+  obs_properties_add_float(props, "interval",
+                           obs_module_text("Interval between change of source"),
+                           0.01, FLT_MAX, 0.01);
+
+  obs_properties_add_bool(props, "random",
+                          obs_module_text("Randomize the slide"));
+
+  UNUSED_PARAMETER(data);
+  return props;
 }
 
-static obs_properties_t *slide_filter_properties(void *data)
-{
-	obs_properties_t *props = obs_properties_create();
-	obs_property_t *p;
-
-	obs_properties_add_float_slider(props, "speed_x",
-			obs_module_text("ScrollFilter.SpeedX"),
-			-500.0f, 500.0f, 1.0f);
-	obs_properties_add_float_slider(props, "speed_y",
-			obs_module_text("ScrollFilter.SpeedY"),
-			-500.0f, 500.0f, 1.0f);
-
-	p = obs_properties_add_bool(props, "limit_cx",
-			obs_module_text("ScrollFilter.LimitWidth"));
-	obs_property_set_modified_callback(p, limit_cx_clicked);
-	obs_properties_add_int(props, "cx",
-			obs_module_text("Crop.Width"), 1, 8192, 1);
-
-	p = obs_properties_add_bool(props, "limit_cy",
-			obs_module_text("ScrollFilter.LimitHeight"));
-	obs_property_set_modified_callback(p, limit_cy_clicked);
-	obs_properties_add_int(props, "cy",
-			obs_module_text("Crop.Height"), 1, 8192, 1);
-
-	UNUSED_PARAMETER(data);
-	return props;
+static void slide_filter_defaults(obs_data_t *settings) {
+  obs_data_set_default_double(settings, "interval", 1);
+  obs_data_set_default_bool(settings, "random", false);
 }
 
-static void slide_filter_defaults(obs_data_t *settings)
-{
-	obs_data_set_default_bool(settings, "limit_size", false);
-	obs_data_set_default_int(settings, "cx", 100);
-	obs_data_set_default_int(settings, "cy", 100);
+static void *slide_filter_create(obs_data_t *settings, obs_source_t *context) {
+  struct slide_filter_data *filter = malloc(sizeof *filter);
+  if (!filter) {
+    blog(LOG_ERROR, "No memory");
+    return NULL;
+  }
+  slide_filter_defaults(settings);
+  slide_filter_update(filter, settings);
+
+  filter->time_remaining = filter->interval;
+  filter->context = context;
+  filter->active_source = 0;
+
+  return filter;
 }
 
-static void slide_filter_tick(void *data, float seconds)
-{
-	struct slide_filter_data *filter = data;
+static void slide_filter_tick(void *data, float seconds) {
+  struct slide_filter_data *filter = data;
 
-	filter->offset.x += filter->size_i.x * filter->scroll_speed.x * seconds;
-	filter->offset.y += filter->size_i.y * filter->scroll_speed.y * seconds;
-
-	if (filter->offset.x > 1.0f)
-		filter->offset.x -= 1.0f;
-	if (filter->offset.y > 1.0f)
-		filter->offset.y -= 1.0f;
+  filter->time_remaining += seconds;
 }
 
-static void slide_filter_render(void *data, gs_effect_t *effect)
-{
-	struct slide_filter_data *filter = data;
-	struct vec2 mul_val;
-	uint32_t base_cx;
-	uint32_t base_cy;
-	uint32_t cx;
-	uint32_t cy;
-
-	obs_source_t *target = obs_filter_get_target(filter->context);
-	base_cx = obs_source_get_base_width(target);
-	base_cy = obs_source_get_base_height(target);
-
-	cx = filter->limit_cx ? filter->cx : base_cx;
-	cy = filter->limit_cy ? filter->cy : base_cy;
-
-	if (base_cx && base_cy) {
-		vec2_set(&filter->size_i,
-				1.0f / (float)base_cx,
-				1.0f / (float)base_cy);
-	} else {
-		vec2_zero(&filter->size_i);
-		obs_source_skip_video_filter(filter->context);
-		return;
-	}
-
-	vec2_set(&mul_val,
-			(float)cx / (float)base_cx,
-			(float)cy / (float)base_cy);
-
-	if (!obs_source_process_filter_begin(filter->context, GS_RGBA,
-				OBS_NO_DIRECT_RENDERING))
-		return;
-
-	gs_effect_set_vec2(filter->param_add, &filter->offset);
-	gs_effect_set_vec2(filter->param_mul, &mul_val);
-
-	gs_effect_set_next_sampler(filter->param_image, filter->sampler);
-
-	obs_source_process_filter_end(filter->context, filter->effect, cx, cy);
-
-	UNUSED_PARAMETER(effect);
+static void slide_filter_render_callback(obs_source_t *parent,
+                                         obs_source_t *child, void *data) {
+  struct slide_filter_data *filter = data;
+  blog(LOG_ERROR, "child scene name, %s", obs_source_get_name(child));
+  if (filter->current_source++ == filter->active_source) {
+    obs_source_set_enabled(child, true);
+  } else {
+    obs_source_set_enabled(child, false);
+  }
 }
 
-static uint32_t slide_filter_width(void *data)
-{
-	struct slide_filter_data *filter = data;
-	obs_source_t *target = obs_filter_get_target(filter->context);
+static void slide_filter_render(void *data, gs_effect_t *effect) {
+  struct slide_filter_data *filter = data;
 
-	return filter->limit_cx ?
-		filter->cx : obs_source_get_base_width(target);
+  while (filter->time_remaining > filter->interval) {
+    obs_source_t *parent = obs_filter_get_parent(filter->context);
+    if (!parent) {
+      blog(LOG_ERROR, "%s need to be in a scene", SLIDE_FILTER_NAME);
+      return;
+    }
+    blog(LOG_ERROR, "Scene name: %s", obs_source_get_name(parent));
+    filter->current_source = 0;
+    obs_source_enum_active_sources(parent, &slide_filter_render_callback,
+                                   filter);
+    if (++filter->active_source == filter->current_source) {
+      filter->active_source = 0;
+    }
+    filter->time_remaining -= filter->interval;
+  }
+
+  obs_source_skip_video_filter(filter->context);
+
+  UNUSED_PARAMETER(effect);
 }
 
-static uint32_t slide_filter_height(void *data)
-{
-	struct slide_filter_data *filter = data;
-		obs_source_t *target = obs_filter_get_target(filter->context);
+static uint32_t slide_filter_width(void *data) {
+  struct slide_filter_data *filter = data;
+  if (!filter) {
+    blog(LOG_ERROR, SLIDE_FILTER_NAME ": slide_filter_width error");
+    return 0;
+  }
+  obs_source_t *target = obs_filter_get_target(filter->context);
 
-	return filter->limit_cy ?
-		filter->cy : obs_source_get_base_height(target);
+  return obs_source_get_base_width(target);
 }
 
-struct obs_source_info slide_filter = {
-	.id                            = "slide_filter",
-	.type                          = OBS_SOURCE_TYPE_FILTER,
-	.output_flags                  = OBS_SOURCE_VIDEO,
-	.get_name                      = slide_filter_get_name,
-	.create                        = slide_filter_create,
-	.destroy                       = slide_filter_destroy,
-	.update                        = slide_filter_update,
-	.get_properties                = slide_filter_properties,
-	.get_defaults                  = slide_filter_defaults,
-	.video_tick                    = slide_filter_tick,
-	.video_render                  = slide_filter_render,
-	.get_width                     = slide_filter_width,
-	.get_height                    = slide_filter_height
-};
+static uint32_t slide_filter_height(void *data) {
+  struct slide_filter_data *filter = data;
+  if (!filter) {
+    blog(LOG_ERROR, SLIDE_FILTER_NAME ": slide_filter_height error");
+    return 0;
+  }
+  obs_source_t *target = obs_filter_get_target(filter->context);
+
+  return obs_source_get_base_height(target);
+}
+
+static struct obs_source_info slide_filter = {
+    .id = "slide_filter",
+    .type = OBS_SOURCE_TYPE_FILTER,
+    .output_flags = OBS_SOURCE_VIDEO,
+    .get_name = slide_filter_get_name,
+    .create = slide_filter_create,
+    .destroy = slide_filter_destroy,
+    .update = slide_filter_update,
+    .get_properties = slide_filter_properties,
+    .get_defaults = slide_filter_defaults,
+    .video_tick = slide_filter_tick,
+    .video_render = slide_filter_render,
+    .filter_remove = slide_filter_remove,
+    .get_width = slide_filter_width,
+    .get_height = slide_filter_height};
+
+bool obs_module_load(void) {
+  blog(LOG_ERROR, "coucoucou");
+  obs_register_source(&slide_filter);
+  return true;
+}
+
+static const char *obs_module_text(const char *val) { return val; }
+
+static bool obs_module_get_string(const char *val, const char **out) {
+  *out = val;
+  return true;
+}
+
+static void obs_module_set_locale(const char *locale) {}
