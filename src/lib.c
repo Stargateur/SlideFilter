@@ -8,10 +8,13 @@ OBS_DECLARE_MODULE()
 
 struct slide_filter_data {
   obs_source_t *context;
+
   float time_remaining;
   float interval;
+
   size_t active_source;
   size_t current_source;
+
   bool random;
 };
 
@@ -22,14 +25,15 @@ static const char *slide_filter_get_name(void *unused) {
 
 static void slide_filter_destroy(void *data) {
   struct slide_filter_data *filter = data;
-  blog(LOG_ERROR, "free data " SLIDE_FILTER_NAME);
+  blog(LOG_DEBUG, SLIDE_FILTER_NAME ": Free data filter");
   free(filter);
 }
 
 static void slide_filter_remove_callback(obs_source_t *parent,
                                          obs_source_t *child, void *data) {
   struct slide_filter_data *filter = data;
-  blog(LOG_ERROR, "child scene name, %s", obs_source_get_name(child));
+  blog(LOG_DEBUG, SLIDE_FILTER_NAME ": Child source scene name, %s",
+       obs_source_get_name(child));
   obs_source_set_enabled(child, true);
 }
 
@@ -38,7 +42,8 @@ static void slide_filter_remove(void *data, obs_source_t *source) {
   if (!source) {
     return;
   }
-  blog(LOG_ERROR, "Scene name: %s", obs_source_get_name(source));
+  blog(LOG_DEBUG, SLIDE_FILTER_NAME ": Scene name: %s",
+       obs_source_get_name(source));
   obs_source_enum_active_sources(source, &slide_filter_remove_callback, filter);
 }
 
@@ -71,7 +76,7 @@ static void slide_filter_defaults(obs_data_t *settings) {
 static void *slide_filter_create(obs_data_t *settings, obs_source_t *context) {
   struct slide_filter_data *filter = malloc(sizeof *filter);
   if (!filter) {
-    blog(LOG_ERROR, "No memory");
+    blog(LOG_ERROR, SLIDE_FILTER_NAME ": No memory");
     return NULL;
   }
   slide_filter_defaults(settings);
@@ -93,7 +98,8 @@ static void slide_filter_tick(void *data, float seconds) {
 static void slide_filter_render_callback(obs_source_t *parent,
                                          obs_source_t *child, void *data) {
   struct slide_filter_data *filter = data;
-  blog(LOG_ERROR, "child scene name, %s", obs_source_get_name(child));
+  blog(LOG_DEBUG, SLIDE_FILTER_NAME ": Child name, %s",
+       obs_source_get_name(child));
   if (filter->current_source++ == filter->active_source) {
     obs_source_set_enabled(child, true);
   } else {
@@ -107,10 +113,12 @@ static void slide_filter_render(void *data, gs_effect_t *effect) {
   while (filter->time_remaining > filter->interval) {
     obs_source_t *parent = obs_filter_get_parent(filter->context);
     if (!parent) {
-      blog(LOG_ERROR, "%s need to be in a scene", SLIDE_FILTER_NAME);
+      blog(LOG_ERROR, SLIDE_FILTER_NAME ": This filter need to be in a scene "
+                                        "or something that can have child");
       return;
     }
-    blog(LOG_ERROR, "Scene name: %s", obs_source_get_name(parent));
+    blog(LOG_DEBUG, SLIDE_FILTER_NAME ": Parent name: %s",
+         obs_source_get_name(parent));
     filter->current_source = 0;
     obs_source_enum_active_sources(parent, &slide_filter_render_callback,
                                    filter);
@@ -134,7 +142,8 @@ static void slide_filter_render(void *data, gs_effect_t *effect) {
 static uint32_t slide_filter_width(void *data) {
   struct slide_filter_data *filter = data;
   if (!filter) {
-    blog(LOG_ERROR, SLIDE_FILTER_NAME ": slide_filter_width error");
+    blog(LOG_ERROR,
+         SLIDE_FILTER_NAME ": Error in slide_filter_width filter is NULL");
     return 0;
   }
   obs_source_t *target = obs_filter_get_target(filter->context);
@@ -145,7 +154,8 @@ static uint32_t slide_filter_width(void *data) {
 static uint32_t slide_filter_height(void *data) {
   struct slide_filter_data *filter = data;
   if (!filter) {
-    blog(LOG_ERROR, SLIDE_FILTER_NAME ": slide_filter_height error");
+    blog(LOG_ERROR,
+         SLIDE_FILTER_NAME ": Error in slide_filter_height filter is NULL");
     return 0;
   }
   obs_source_t *target = obs_filter_get_target(filter->context);
@@ -154,7 +164,7 @@ static uint32_t slide_filter_height(void *data) {
 }
 
 static struct obs_source_info slide_filter = {
-    .id = "slide_filter",
+    .id = "slide-filter",
     .type = OBS_SOURCE_TYPE_FILTER,
     .output_flags = OBS_SOURCE_VIDEO,
     .get_name = slide_filter_get_name,
@@ -170,7 +180,6 @@ static struct obs_source_info slide_filter = {
     .get_height = slide_filter_height};
 
 bool obs_module_load(void) {
-  blog(LOG_ERROR, "coucoucou");
   obs_register_source(&slide_filter);
   return true;
 }
