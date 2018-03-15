@@ -184,11 +184,11 @@ bool obs_module_load(void) {
   return true;
 }
 
-static const char *obs_module_text(const char *val) { return val; }
+const char *obs_module_text(const char *val) { return val; }
 
-static bool obs_module_get_string(const char *val, const char **out) {
+bool obs_module_get_string(const char *val, const char **out) {
   *out = val;
   return true;
 }
 
-static void obs_module_set_locale(const char *locale) {}
+void obs_module_set_locale(const char *locale) {}
