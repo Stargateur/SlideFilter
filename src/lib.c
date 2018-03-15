@@ -35,16 +35,11 @@ static void slide_filter_remove_callback(obs_source_t *parent,
 
 static void slide_filter_remove(void *data, obs_source_t *source) {
   struct slide_filter_data *filter = data;
-  if (!filter) {
+  if (!source) {
     return;
   }
-  obs_source_t *parent = obs_filter_get_parent(filter->context);
-  if (!parent) {
-    blog(LOG_ERROR, "%s need to be in a scene", SLIDE_FILTER_NAME);
-    return;
-  }
-  blog(LOG_ERROR, "Scene name: %s", obs_source_get_name(parent));
-  obs_source_enum_active_sources(parent, &slide_filter_remove_callback, filter);
+  blog(LOG_ERROR, "Scene name: %s", obs_source_get_name(source));
+  obs_source_enum_active_sources(source, &slide_filter_remove_callback, filter);
 }
 
 static void slide_filter_update(void *data, obs_data_t *settings) {
@@ -121,6 +116,12 @@ static void slide_filter_render(void *data, gs_effect_t *effect) {
                                    filter);
     if (++filter->active_source == filter->current_source) {
       filter->active_source = 0;
+    }
+    if (filter->random) {
+      filter->active_source = rand() % filter->current_source;
+      filter->current_source = 0;
+      obs_source_enum_active_sources(parent, &slide_filter_render_callback,
+                                     filter);
     }
     filter->time_remaining -= filter->interval;
   }
